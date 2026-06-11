@@ -39,6 +39,14 @@ enum AecMode {
     kAecOnServerSide,
 };
 
+// Semantic chat mode selected via the "+" button (mirrors the server-side
+// session). Drives the status label shown while listening.
+enum ChatMode {
+    kChatModeNormal,
+    kChatModeFreeChat,
+    kChatModeLearning,
+};
+
 class Application {
 public:
     static Application& GetInstance() {
@@ -103,6 +111,20 @@ public:
      */
     void StopListening();
 
+    /**
+     * Enter normal free-chat mode (double "+").
+     * Opens the audio channel if needed, clears any active server-side
+     * lesson/game, and starts listening. Thread-safe.
+     */
+    void EnterFreeChatMode();
+
+    /**
+     * Start a listen-and-say lesson (triple "+").
+     * Opens the audio channel if needed and asks the server to begin the
+     * given listen-and-say course/lesson. Thread-safe.
+     */
+    void StartListenAndSay(const std::string& course_id, const std::string& lesson_id);
+
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
@@ -131,6 +153,7 @@ private:
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
+    ChatMode chat_mode_ = kChatModeNormal;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     AudioService audio_service_;
@@ -182,6 +205,13 @@ private:
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     ListeningMode GetDefaultListeningMode() const;
+    // Status label for the active "+" mode (learning / free style), or the
+    // given default label when no "+" mode is active (normal wake-word use).
+    const char* GetModeStatusLabel(const char* default_label) const;
+    // Open the audio channel if needed and abort any in-flight reply. Must run
+    // on the main task. Returns false if the protocol is missing or the channel
+    // could not be opened.
+    bool EnsureAudioChannelReady();
     
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

@@ -23,6 +23,8 @@
         "CONNECTION_SUCCESSFUL": "Kết nối thành công",
         "CONNECTED_TO": "Đã kết nối đến ",
         "LISTENING": "Đang lắng nghe...",
+        "LEARNING": "Learning...",
+        "FREE_STYLE": "Free style",
         "SPEAKING": "Đang nói...",
         "SERVER_NOT_FOUND": "Đang tìm dịch vụ khả dụng",
         "SERVER_NOT_CONNECTED": "Không thể kết nối đến dịch vụ, vui lòng thử lại sau",
