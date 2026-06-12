@@ -6,6 +6,31 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config CONNECT_TO_AGENTS_TUTOR_TEST
+    bool "Connect to robo-worker Agents Tutor test endpoint (bring-up only)"
+    default n
+    help
+        Bypass OTA-based protocol selection and connect directly to the
+        robo-worker Tutor Durable Object test/bring-up endpoint. This is
+        NOT the production xiaozhi protocol: no device auth, no OTA.
+        See docs/esp32s3-agents-endpoint-guide.md.
+
+config AGENTS_TUTOR_WS_URL
+    depends on CONNECT_TO_AGENTS_TUTOR_TEST
+    string "Agents Tutor base WebSocket URL"
+    default "wss://robo-worker.taskfi.workers.dev/agents/tutor/"
+    help
+        Base URL, e.g. "wss://<host>/agents/tutor/". The device appends
+        "child:<childId>?token=<token>".
+
+config AGENTS_TUTOR_TOKEN
+    depends on CONNECT_TO_AGENTS_TUTOR_TEST
+    string "Agents Tutor token"
+    default "test"
+    help
+        Sent as ?token=<value>. Only checked for non-emptiness by the
+        test endpoint, not verified.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE

@@ -78,3 +78,8 @@ CONFIG_LV_USE_WIN=n
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
 
+
+# Connect directly to robo-worker Agents Tutor test endpoint (bring-up)
+CONFIG_CONNECT_TO_AGENTS_TUTOR_TEST=y
+CONFIG_AGENTS_TUTOR_WS_URL="wss://robo-worker.taskfi.workers.dev/agents/tutor/"
+CONFIG_AGENTS_TUTOR_TOKEN="test"
