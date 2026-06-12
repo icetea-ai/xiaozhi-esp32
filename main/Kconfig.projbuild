@@ -31,6 +31,23 @@ config AGENTS_TUTOR_TOKEN
         Sent as ?token=<value>. Only checked for non-emptiness by the
         test endpoint, not verified.
 
+config AGENTS_TUTOR_COURSE_ID
+    depends on CONNECT_TO_AGENTS_TUTOR_TEST
+    string "Agents Tutor listen-and-say course id"
+    default "9c2d8a1f-3e7b-4c6d-9f01-1a2b3c4d5e6f"
+    help
+        course_id sent in the listen_and_say frame on "+"x3. Defaults to the
+        bundled listen-and-say demo course. Empty -> server falls back to
+        DEFAULT_COURSE.
+
+config AGENTS_TUTOR_LESSON_ID
+    depends on CONNECT_TO_AGENTS_TUTOR_TEST
+    string "Agents Tutor listen-and-say lesson id"
+    default "9c2d8a1f-3e7b-4c6d-9f01-1a2b3c4d5e71"
+    help
+        lesson_id sent in the listen_and_say frame. Empty -> server resolves
+        the first lesson of the course.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE

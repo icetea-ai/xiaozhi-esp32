@@ -78,6 +78,14 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+void Protocol::SendListenAndSayMode() {
+    // No-op for protocols that don't support device learning modes.
+}
+
+void Protocol::SendFreeChatMode() {
+    // No-op for protocols that don't support device learning modes.
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

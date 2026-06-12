@@ -103,6 +103,14 @@ public:
      */
     void StopListening();
 
+    /**
+     * Device learning modes for the Agents Tutor endpoint (xiaozhi-esp32
+     * "+"×3 / "+"×2). Opens the audio channel if needed, then sends the mode
+     * frame. No-op on protocols that don't implement the mode frames.
+     */
+    void StartListeningLessonMode();
+    void StartFreeChatMode();
+
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");

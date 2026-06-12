@@ -19,6 +19,12 @@
 #ifndef CONFIG_AGENTS_TUTOR_TOKEN
 #define CONFIG_AGENTS_TUTOR_TOKEN "test"
 #endif
+#ifndef CONFIG_AGENTS_TUTOR_COURSE_ID
+#define CONFIG_AGENTS_TUTOR_COURSE_ID "9c2d8a1f-3e7b-4c6d-9f01-1a2b3c4d5e6f"
+#endif
+#ifndef CONFIG_AGENTS_TUTOR_LESSON_ID
+#define CONFIG_AGENTS_TUTOR_LESSON_ID "9c2d8a1f-3e7b-4c6d-9f01-1a2b3c4d5e71"
+#endif
 
 // cf_agent_state frames can be several KB; a small receive buffer fragments
 // them and breaks cJSON parsing. We ignore those frames anyway, but the
@@ -65,6 +71,38 @@ void AgentsTutorProtocol::SendStartListening(ListeningMode mode) {
 void AgentsTutorProtocol::SendStopListening() {
     // VAD detected end-of-speech: flush STT on the server.
     SendText("{\"type\":\"eos\"}");
+}
+
+void AgentsTutorProtocol::SendListenAndSayMode() {
+    // "+"×3: start a listen-and-say lesson. course_id/lesson_id come from NVS
+    // (overridable per device) or Kconfig defaults. Empty values are omitted so
+    // the server falls back to DEFAULT_COURSE / the first lesson.
+    Settings settings("agents_tutor", false);
+    std::string course_id = settings.GetString("course_id");
+    if (course_id.empty()) {
+        course_id = CONFIG_AGENTS_TUTOR_COURSE_ID;
+    }
+    std::string lesson_id = settings.GetString("lesson_id");
+    if (lesson_id.empty()) {
+        lesson_id = CONFIG_AGENTS_TUTOR_LESSON_ID;
+    }
+
+    std::string message = "{\"type\":\"listen_and_say\",\"state\":\"start\"";
+    if (!course_id.empty()) {
+        message += ",\"course_id\":\"" + course_id + "\"";
+    }
+    if (!lesson_id.empty()) {
+        message += ",\"lesson_id\":\"" + lesson_id + "\"";
+    }
+    message += "}";
+    ESP_LOGI(TAG, "Sending listen_and_say: course=%s lesson=%s", course_id.c_str(), lesson_id.c_str());
+    SendText(message);
+}
+
+void AgentsTutorProtocol::SendFreeChatMode() {
+    // "+"×2: clear any active lesson/game so the next utterance is free chat.
+    ESP_LOGI(TAG, "Sending free_chat");
+    SendText("{\"type\":\"free_chat\",\"state\":\"start\"}");
 }
 
 void AgentsTutorProtocol::SendWakeWordDetected(const std::string& wake_word) {

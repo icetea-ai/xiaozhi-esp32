@@ -28,6 +28,8 @@ public:
     void SendStopListening() override;
     void SendWakeWordDetected(const std::string& wake_word) override;
     void SendAbortSpeaking(AbortReason reason) override;
+    void SendListenAndSayMode() override;
+    void SendFreeChatMode() override;
 
 private:
     std::unique_ptr<WebSocket> websocket_;

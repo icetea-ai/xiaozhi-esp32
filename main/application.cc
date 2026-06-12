@@ -823,6 +823,42 @@ void Application::ContinueOpenAudioChannel(ListeningMode mode) {
     }
 }
 
+void Application::StartListeningLessonMode() {
+    Schedule([this]() {
+        if (!protocol_) {
+            return;
+        }
+        if (!protocol_->IsAudioChannelOpened()) {
+            SetDeviceState(kDeviceStateConnecting);
+            if (!protocol_->OpenAudioChannel()) {
+                return;
+            }
+        }
+        // Server pushes the first lesson question (tts) which transitions us out
+        // of Connecting into Speaking — don't set a listening mode here.
+        protocol_->SendListenAndSayMode();
+    });
+}
+
+void Application::StartFreeChatMode() {
+    Schedule([this]() {
+        if (!protocol_) {
+            return;
+        }
+        if (!protocol_->IsAudioChannelOpened()) {
+            SetDeviceState(kDeviceStateConnecting);
+            if (!protocol_->OpenAudioChannel()) {
+                return;
+            }
+        }
+        protocol_->SendFreeChatMode();
+        // Free chat: start listening so the child can talk immediately.
+        if (GetDeviceState() != kDeviceStateSpeaking) {
+            SetListeningMode(GetDefaultListeningMode());
+        }
+    });
+}
+
 void Application::HandleStartListeningEvent() {
     auto state = GetDeviceState();
     

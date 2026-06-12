@@ -82,6 +82,10 @@ public:
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
+    // Device mode frames (xiaozhi-esp32 "+"×3 / "+"×2). Default no-op; only the
+    // Agents Tutor protocol implements them. See docs/xiaozhi-device-modes.md.
+    virtual void SendListenAndSayMode();
+    virtual void SendFreeChatMode();
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;

@@ -151,10 +151,16 @@ private:
             GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
+        // "+"×2 → free chat, "+"×3 → listen-and-say lesson (Agents Tutor modes).
         volume_up_button_.OnDoubleClick([this]() {
             power_save_timer_->WakeUp();
-            Application::GetInstance().ToggleChatState();
+            Application::GetInstance().StartFreeChatMode();
         });
+
+        volume_up_button_.OnMultipleClick([this]() {
+            power_save_timer_->WakeUp();
+            Application::GetInstance().StartListeningLessonMode();
+        }, 3);
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
