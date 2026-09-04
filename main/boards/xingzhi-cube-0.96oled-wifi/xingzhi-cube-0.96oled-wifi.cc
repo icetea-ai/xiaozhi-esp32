@@ -151,10 +151,18 @@ private:
             GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
+        // Double "+" → enter normal free-chat mode.
         volume_up_button_.OnDoubleClick([this]() {
             power_save_timer_->WakeUp();
-            Application::GetInstance().ToggleChatState();
+            Application::GetInstance().EnterFreeChatMode();
         });
+
+        // Triple "+" → start a listen-and-say lesson (course/lesson from Kconfig).
+        volume_up_button_.OnMultipleClick([this]() {
+            power_save_timer_->WakeUp();
+            Application::GetInstance().StartListenAndSay(
+                CONFIG_LISTEN_AND_SAY_COURSE_ID, CONFIG_LISTEN_AND_SAY_LESSON_ID);
+        }, 3);
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();

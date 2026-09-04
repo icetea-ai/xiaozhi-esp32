@@ -78,6 +78,19 @@ void Protocol::SendMcpMessage(const std::string& payload) {
     SendText(message);
 }
 
+void Protocol::SendListenAndSay(const std::string& course_id, const std::string& lesson_id) {
+    std::string message = "{\"session_id\":\"" + session_id_ + "\"";
+    message += ",\"type\":\"listen_and_say\",\"state\":\"start\"";
+    message += ",\"course_id\":\"" + course_id + "\"";
+    message += ",\"lesson_id\":\"" + lesson_id + "\"}";
+    SendText(message);
+}
+
+void Protocol::SendFreeChat() {
+    std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"free_chat\",\"state\":\"start\"}";
+    SendText(message);
+}
+
 bool Protocol::IsTimeout() const {
     const int kTimeoutSeconds = 120;
     auto now = std::chrono::steady_clock::now();

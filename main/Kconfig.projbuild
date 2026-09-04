@@ -6,6 +6,20 @@ config OTA_URL
     help
         The application will access this URL to check for new firmwares and server address.
 
+config LISTEN_AND_SAY_COURSE_ID
+    string "Listen-and-say course id"
+    default "9c2d8a1f-3e7b-4c6d-9f01-1a2b3c4d5e6f"
+    help
+        Course id sent to the server when the user triple-clicks "+" to start a
+        listen-and-say lesson. Defaults to the bundled listen-and-say demo course.
+
+config LISTEN_AND_SAY_LESSON_ID
+    string "Listen-and-say lesson id"
+    default "9c2d8a1f-3e7b-4c6d-9f01-1a2b3c4d5e71"
+    help
+        Lesson id within LISTEN_AND_SAY_COURSE_ID to start on triple-click "+".
+        Must be a listen-and-say lesson. Defaults to the demo course's first lesson.
+
 choice
     prompt "Flash Assets"
     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE

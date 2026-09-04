@@ -85,6 +85,10 @@ public:
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
+    // Switch the server-side session into a listen-and-say lesson (triple "+").
+    virtual void SendListenAndSay(const std::string& course_id, const std::string& lesson_id);
+    // Clear any active lesson/game and return to normal free chat (double "+").
+    virtual void SendFreeChat();
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;

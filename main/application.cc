@@ -852,6 +852,60 @@ void Application::StopListening() {
     xEventGroupSetBits(event_group_, MAIN_EVENT_STOP_LISTENING);
 }
 
+bool Application::EnsureAudioChannelReady() {
+    if (!protocol_) {
+        ESP_LOGE(TAG, "Protocol not initialized");
+        return false;
+    }
+    if (!protocol_->IsAudioChannelOpened()) {
+        SetDeviceState(kDeviceStateConnecting);
+        if (!protocol_->OpenAudioChannel()) {
+            return false;
+        }
+    }
+    // Drop any in-flight reply so the new mode can start immediately.
+    if (GetDeviceState() == kDeviceStateSpeaking) {
+        AbortSpeaking(kAbortReasonNone);
+    }
+    return true;
+}
+
+void Application::EnterFreeChatMode() {
+    Schedule([this]() {
+        // Switch into free-chat mode up-front so the status label updates the
+        // moment "+" x2 is pressed (any Connecting state will already show it).
+        chat_mode_ = kChatModeFreeChat;
+
+        if (!EnsureAudioChannelReady()) {
+            return;
+        }
+        // Tell the server to clear any active lesson/game and resume free chat.
+        protocol_->SendFreeChat();
+        SetListeningMode(GetDefaultListeningMode());
+    });
+}
+
+void Application::StartListenAndSay(const std::string& course_id, const std::string& lesson_id) {
+    Schedule([this, course_id, lesson_id]() {
+        // Switch into learning mode up-front so the status label updates the
+        // moment "+" x3 is pressed (any Connecting state will already show it).
+        // Auto/realtime listening (never manual) so that after each spoken
+        // question (tts.stop) the device transitions to Listening and captures
+        // the child's answer. The server drives the first question via tts.start.
+        listening_mode_ = GetDefaultListeningMode();
+        chat_mode_ = kChatModeLearning;
+
+        if (!EnsureAudioChannelReady()) {
+            return;
+        }
+        // The device stays out of Listening (mic closed) until the server reads
+        // the first question; show the learning label now for instant feedback,
+        // covering the case where the channel was already open (no Connecting).
+        Board::GetInstance().GetDisplay()->SetStatus(Lang::Strings::LEARNING);
+        protocol_->SendListenAndSay(course_id, lesson_id);
+    });
+}
+
 void Application::HandleToggleChatEvent() {
     auto state = GetDeviceState();
     
@@ -968,6 +1022,10 @@ void Application::HandleWakeWordDetectedEvent() {
     auto wake_word = audio_service_.GetLastWakeWord();
     ESP_LOGI(TAG, "Wake word detected: %s (state: %d)", wake_word.c_str(), (int)state);
 
+    // A wake word always returns to the normal assistant, leaving any active
+    // "+" lesson/free-chat mode so the status label and server session realign.
+    chat_mode_ = kChatModeNormal;
+
     if (state == kDeviceStateIdle) {
         audio_service_.EncodeWakeWord();
         auto wake_word = audio_service_.GetLastWakeWord();
@@ -1059,12 +1117,17 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateConnecting:
-            display->SetStatus(Lang::Strings::CONNECTING);
+            // Keep the active "+" mode label visible while we wait on the
+            // server, so triple-click feedback is immediate (not only once the
+            // first question has been spoken).
+            display->SetStatus(GetModeStatusLabel(Lang::Strings::CONNECTING));
             display->SetEmotion("neutral");
             display->SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
-            display->SetStatus(Lang::Strings::LISTENING);
+            // Status label reflects the active "+" mode: learning vs free style,
+            // falling back to the plain listening label for normal wake-word use.
+            display->SetStatus(GetModeStatusLabel(Lang::Strings::LISTENING));
             display->SetEmotion("neutral");
             // Reset VAD turn tracking for a fresh end-of-speech detection
             vad_had_speech_in_turn_ = false;
@@ -1196,6 +1259,17 @@ void Application::SetListeningMode(ListeningMode mode) {
 
 ListeningMode Application::GetDefaultListeningMode() const {
     return aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime;
+}
+
+const char* Application::GetModeStatusLabel(const char* default_label) const {
+    switch (chat_mode_) {
+        case kChatModeLearning:
+            return Lang::Strings::LEARNING;
+        case kChatModeFreeChat:
+            return Lang::Strings::FREE_STYLE;
+        default:
+            return default_label;
+    }
 }
 
 void Application::Reboot() {
