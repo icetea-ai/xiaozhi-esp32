@@ -59,8 +59,18 @@ key agreement. Espressif's EspBlufi app releases that support IDF 6 are the refe
 version added 0x04 before relying on it.
 
 ### C6 co-processor firmware
-The host now runs esp_hosted 2.12.x, and the C6's slave firmware must be the matching esp_hosted 2.12.x release. Flash
-it on the bench. Adding it to the factory station is a follow-up task.
+The host now runs esp_hosted 2.12.x, and the C6's slave firmware must be the matching esp_hosted 2.12.x release.
+- **How it was done on the bench:** build esp_hosted's `slave/` project for esp32c6, then run its
+  `examples/host_performs_slave_ota` on the P4 with the `.bin` placed in `components/ota_partition/slave_fw_bin/`.
+  The update ran over SDIO in about 12 s, with no extra wiring. Boards shipped with slave fw 0.0.0.
+- **Required host change:** since esp_hosted 2.5.2 the C6's BT controller starts disabled. `Blufi::_host_init()`
+  must call `esp_hosted_bt_controller_init()` and `esp_hosted_bt_controller_enable()`; otherwise HCI_Reset (0x0c03) times out.
+- **Follow-up:** add the C6 update to the factory flow.
+
+### TLS: cross-signed root
+IDF 6.0.2's CA bundle no longer contains "GlobalSign Root CA". Cloudflare (`*.workers.dev`) serves GTS Root R4
+cross-signed by it, so every HTTPS call failed with `-0x3000`. The fix is
+`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y` in `sdkconfig.defaults` (about 700 bytes of heap).
 
 ### CI and tooling
 - `.github/workflows/build.yml`: image `espressif/idf:v6.0.2`, with the variant matrix filtered to `tuni-p4*`.

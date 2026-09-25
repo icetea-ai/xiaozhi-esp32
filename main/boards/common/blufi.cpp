@@ -60,7 +60,9 @@ static std::string GetBlufiDeviceName() {
 // vendored header.
 extern "C" {
 #include "esp_hosted_bt.h"
+#include "esp_hosted_misc.h"
 }
+#include "esp_hosted_bluedroid.h"  // hosted_hci_bluedroid_* (split out of esp_hosted_bt.h in 2.x)
 #endif
 
 #ifdef CONFIG_BT_NIMBLE_ENABLED
@@ -101,7 +103,7 @@ void esp_blufi_btc_deinit(void);
 #include <wifi_station.h>
 #include "esp_crc.h"
 #include "esp_random.h"
-#include "mbedtls/md5.h"
+#include "mbedtls/platform_util.h"
 #include "ssid_manager.h"
 
 static const char* BLUFI_TAG = "BLUFI_CLASS";
@@ -189,6 +191,10 @@ esp_err_t Blufi::deinit() {
             return ESP_OK;
         }
         m_deinited = true;
+        if (m_scan_event_instance != nullptr) {
+            esp_event_handler_instance_unregister(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, m_scan_event_instance);
+            m_scan_event_instance = nullptr;
+        }
         ret = _host_deinit();
         if (ret) {
             ESP_LOGE(BLUFI_TAG, "Host deinit failed: %s", esp_err_to_name(ret));
@@ -208,6 +214,17 @@ esp_err_t Blufi::_host_init() {
 #if CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID
     // No local controller: bridge Bluedroid's HCI to the ESP-Hosted co-processor
     // over VHCI before esp_bluedroid_init() so the host stack has a transport.
+    // Since esp_hosted 2.5.2 the co-processor's BT controller starts disabled
+    // and must be brought up by the host first (else HCI_Reset times out).
+    esp_err_t ctrl_ret = esp_hosted_bt_controller_init();
+    if (ctrl_ret == ESP_OK) {
+        ctrl_ret = esp_hosted_bt_controller_enable();
+    }
+    if (ctrl_ret != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "%s co-processor BT controller init failed: %s", __func__,
+                 esp_err_to_name(ctrl_ret));
+        return ESP_FAIL;
+    }
     hosted_hci_bluedroid_open();
     static const esp_bluedroid_hci_driver_operations_t hosted_hci_ops = {
         .send = hosted_hci_bluedroid_send,
@@ -252,6 +269,8 @@ esp_err_t Blufi::_host_deinit() {
     }
 #if CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID
     hosted_hci_bluedroid_close();
+    esp_hosted_bt_controller_disable();
+    esp_hosted_bt_controller_deinit(false);  // keep controller memory so BluFi can restart
 #endif
     return ESP_OK;
 }
@@ -407,38 +426,57 @@ esp_err_t Blufi::_controller_deinit() {
 }
 #endif
 
-static int myrand(void* rng_state, unsigned char* output, size_t len) {
-    esp_fill_random(output, len);
-    return 0;
+// Negotiation packet types (BluFi "negotiate data" sub-protocol).
+#define SEC_TYPE_DH_PARAM_LEN 0x00
+#define SEC_TYPE_DH_PARAM_DATA 0x01
+#define DH_PARAM_LEN_MAX 1024  // bounds the phone-controlled malloc
+
+void Blufi::_security_cleanup_aes() {
+    psa_cipher_abort(&m_sec->enc_operation);
+    psa_cipher_abort(&m_sec->dec_operation);
+    psa_destroy_key(m_sec->aes_key);  // no-op for 0
+    m_sec->aes_key = 0;
+}
+
+void Blufi::_security_cleanup_dh_param() {
+    free(m_sec->dh_param);
+    m_sec->dh_param = nullptr;
+}
+
+// IV for one direction: first 16 bytes of SHA-256(domain || shared secret).
+static bool _derive_iv(const char* domain, const uint8_t* share_key, size_t share_len, uint8_t iv[16]) {
+    psa_hash_operation_t op = PSA_HASH_OPERATION_INIT;
+    uint8_t hash[32];
+    size_t hash_len = 0;
+    bool ok = psa_hash_setup(&op, PSA_ALG_SHA_256) == PSA_SUCCESS &&
+              psa_hash_update(&op, (const uint8_t*)domain, strlen(domain)) == PSA_SUCCESS &&
+              psa_hash_update(&op, share_key, share_len) == PSA_SUCCESS &&
+              psa_hash_finish(&op, hash, sizeof(hash), &hash_len) == PSA_SUCCESS;
+    if (!ok) {
+        psa_hash_abort(&op);
+    }
+    memcpy(iv, hash, 16);
+    mbedtls_platform_zeroize(hash, sizeof(hash));
+    return ok;
+}
+
+static bool _start_ctr_stream(psa_cipher_operation_t* op, psa_key_id_t key, const uint8_t iv[16]) {
+    // CTR is symmetric: the decrypt direction also uses an encrypt operation.
+    return psa_cipher_encrypt_setup(op, key, PSA_ALG_CTR) == PSA_SUCCESS &&
+           psa_cipher_set_iv(op, iv, 16) == PSA_SUCCESS;
 }
 
 void Blufi::_security_init() {
-    m_sec = new BlufiSecurity();
-    if (m_sec == nullptr) {
-        ESP_LOGE(BLUFI_TAG, "Failed to allocate security context");
-        return;
-    }
-    memset(m_sec, 0, sizeof(BlufiSecurity));
-    m_sec->dhm = new mbedtls_dhm_context();
-    m_sec->aes = new mbedtls_aes_context();
-
-    mbedtls_dhm_init(m_sec->dhm);
-    mbedtls_aes_init(m_sec->aes);
-
-    memset(m_sec->iv, 0x0, sizeof(m_sec->iv));
+    m_sec = new BlufiSecurity();  // value-init: zeroed PSA operations are valid initial state
 }
 
 void Blufi::_security_deinit() {
     if (m_sec == nullptr)
         return;
 
-    if (m_sec->dh_param) {
-        free(m_sec->dh_param);
-    }
-    mbedtls_dhm_free(m_sec->dhm);
-    mbedtls_aes_free(m_sec->aes);
-    delete m_sec->dhm;
-    delete m_sec->aes;
+    _security_cleanup_aes();
+    _security_cleanup_dh_param();
+    mbedtls_platform_zeroize(m_sec, sizeof(BlufiSecurity));
     delete m_sec;
     m_sec = nullptr;
 }
@@ -459,7 +497,7 @@ void Blufi::_dh_negotiate_data_handler(uint8_t* data, int len, uint8_t** output_
 
     uint8_t type = data[0];
     switch (type) {
-        case 0x00:
+        case SEC_TYPE_DH_PARAM_LEN:
             if (len < 3) {
                 ESP_LOGE(BLUFI_TAG, "DH_PARAM_LEN packet too short");
                 btc_blufi_report_error(ESP_BLUFI_DATA_FORMAT_ERROR);
@@ -467,115 +505,173 @@ void Blufi::_dh_negotiate_data_handler(uint8_t* data, int len, uint8_t** output_
             }
 
             m_sec->dh_param_len = (data[1] << 8) | data[2];
-            if (m_sec->dh_param) {
-                free(m_sec->dh_param);
-                m_sec->dh_param = nullptr;
+            if (m_sec->dh_param_len == 0 || m_sec->dh_param_len > DH_PARAM_LEN_MAX) {
+                ESP_LOGE(BLUFI_TAG, "Invalid DH param length %d", m_sec->dh_param_len);
+                m_sec->dh_param_len = 0;
+                btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+                return;
             }
+            // A new negotiation replaces any previous session.
+            _security_cleanup_dh_param();
+            _security_cleanup_aes();
             m_sec->dh_param = (uint8_t*)malloc(m_sec->dh_param_len);
             if (m_sec->dh_param == nullptr) {
                 ESP_LOGE(BLUFI_TAG, "DH malloc failed");
+                m_sec->dh_param_len = 0;
                 btc_blufi_report_error(ESP_BLUFI_DH_MALLOC_ERROR);
             }
             break;
-        case 0x01: {
+        case SEC_TYPE_DH_PARAM_DATA: {
             if (m_sec->dh_param == nullptr) {
                 ESP_LOGE(BLUFI_TAG, "DH param not allocated");
                 btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
                 return;
             }
-            uint8_t* param = m_sec->dh_param;
+            if (len < m_sec->dh_param_len + 1) {
+                ESP_LOGE(BLUFI_TAG, "DH param data shorter than announced");
+                btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+                return;
+            }
             memcpy(m_sec->dh_param, &data[1], m_sec->dh_param_len);
-            int ret = mbedtls_dhm_read_params(m_sec->dhm, &param, &param[m_sec->dh_param_len]);
-            if (ret) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_read_params failed %d", ret);
+
+            // Payload is len16|P|len16|G|len16|peer public key. P and G must be the
+            // RFC 7919 ffdhe3072 group, which PSA uses implicitly, so skip them.
+            const uint8_t* param = m_sec->dh_param;
+            const uint8_t* end = param + m_sec->dh_param_len;
+            const uint8_t* peer_pub = nullptr;
+            size_t pub_len = 0;
+            for (int field = 0; field < 3; field++) {
+                if (end - param < 2) {
+                    break;
+                }
+                size_t field_len = (param[0] << 8) | param[1];
+                param += 2;
+                if ((size_t)(end - param) < field_len) {
+                    break;
+                }
+                if (field == 2) {
+                    peer_pub = param;
+                    pub_len = field_len;
+                }
+                param += field_len;
+            }
+            if (peer_pub == nullptr || pub_len != BlufiSecurity::kDhKeyLen) {
+                ESP_LOGE(BLUFI_TAG, "Bad DH params (peer key %u bytes, need %u for ffdhe3072)",
+                         (unsigned)pub_len, (unsigned)BlufiSecurity::kDhKeyLen);
+                _security_cleanup_dh_param();
                 btc_blufi_report_error(ESP_BLUFI_READ_PARAM_ERROR);
                 return;
             }
 
-            const int dhm_len = mbedtls_dhm_get_len(m_sec->dhm);
-
-            ret = mbedtls_dhm_make_public(m_sec->dhm, dhm_len, m_sec->self_public_key, dhm_len,
-                                          myrand, NULL);
-            if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_make_public failed: %d", ret);
+            psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+            psa_set_key_type(&attr, PSA_KEY_TYPE_DH_KEY_PAIR(PSA_DH_FAMILY_RFC7919));
+            psa_set_key_bits(&attr, BlufiSecurity::kDhKeyLen * 8);
+            psa_set_key_algorithm(&attr, PSA_ALG_FFDH);
+            psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_DERIVE);
+            psa_key_id_t private_key = 0;
+            size_t public_key_len = 0;
+            psa_status_t status = psa_generate_key(&attr, &private_key);
+            if (status == PSA_SUCCESS) {
+                status = psa_export_public_key(private_key, m_sec->self_public_key,
+                                               sizeof(m_sec->self_public_key), &public_key_len);
+            }
+            if (status != PSA_SUCCESS) {
+                ESP_LOGE(BLUFI_TAG, "DH key generation failed: %d", (int)status);
+                psa_destroy_key(private_key);
+                _security_cleanup_dh_param();
                 btc_blufi_report_error(ESP_BLUFI_MAKE_PUBLIC_ERROR);
                 return;
             }
-            ret = mbedtls_dhm_calc_secret(m_sec->dhm, m_sec->share_key, SHARE_KEY_LEN,
-                                          &m_sec->share_len, myrand, NULL);
-            if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_calc_secret failed: %d", ret);
+            status = psa_raw_key_agreement(PSA_ALG_FFDH, private_key, peer_pub, pub_len,
+                                           m_sec->share_key, sizeof(m_sec->share_key),
+                                           &m_sec->share_len);
+            psa_destroy_key(private_key);
+            _security_cleanup_dh_param();
+            if (status != PSA_SUCCESS) {
+                ESP_LOGE(BLUFI_TAG, "DH key agreement failed: %d", (int)status);
+                btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+                return;
+            }
+
+            size_t hash_len = 0;
+            if (psa_hash_compute(PSA_ALG_SHA_256, m_sec->share_key, m_sec->share_len, m_sec->psk,
+                                 sizeof(m_sec->psk), &hash_len) != PSA_SUCCESS) {
+                ESP_LOGE(BLUFI_TAG, "PSK derivation failed");
+                btc_blufi_report_error(ESP_BLUFI_CALC_SHA_256_ERROR);
+                return;
+            }
+
+            psa_key_attributes_t aes_attr = PSA_KEY_ATTRIBUTES_INIT;
+            psa_set_key_type(&aes_attr, PSA_KEY_TYPE_AES);
+            psa_set_key_bits(&aes_attr, sizeof(m_sec->psk) * 8);
+            psa_set_key_algorithm(&aes_attr, PSA_ALG_CTR);
+            psa_set_key_usage_flags(&aes_attr, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+            uint8_t iv_enc[16], iv_dec[16];
+            bool ok = psa_import_key(&aes_attr, m_sec->psk, sizeof(m_sec->psk), &m_sec->aes_key) == PSA_SUCCESS &&
+                      _derive_iv("blufi_enc", m_sec->share_key, m_sec->share_len, iv_enc) &&
+                      _derive_iv("blufi_dec", m_sec->share_key, m_sec->share_len, iv_dec) &&
+                      _start_ctr_stream(&m_sec->enc_operation, m_sec->aes_key, iv_enc) &&
+                      _start_ctr_stream(&m_sec->dec_operation, m_sec->aes_key, iv_dec);
+            mbedtls_platform_zeroize(iv_enc, sizeof(iv_enc));
+            mbedtls_platform_zeroize(iv_dec, sizeof(iv_dec));
+            mbedtls_platform_zeroize(m_sec->psk, sizeof(m_sec->psk));
+            if (!ok) {
+                ESP_LOGE(BLUFI_TAG, "AES session setup failed");
+                _security_cleanup_aes();
                 btc_blufi_report_error(ESP_BLUFI_ENCRYPT_ERROR);
                 return;
             }
 
-            ret = mbedtls_md5(m_sec->share_key, m_sec->share_len, m_sec->psk);
-            if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_md5 failed: %d", ret);
-                btc_blufi_report_error(ESP_BLUFI_CALC_MD5_ERROR);
-                return;
-            }
-            ret = mbedtls_aes_setkey_enc(m_sec->aes, m_sec->psk, PSK_LEN * 8);
-            if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_aes_setkey_enc failed: -0x%04X", -ret);
-                btc_blufi_report_error(ESP_BLUFI_ENCRYPT_ERROR);
-                return;
-            }
             *output_data = m_sec->self_public_key;
-            *output_len = dhm_len;
+            *output_len = public_key_len;
             *need_free = false;
             ESP_LOGI(BLUFI_TAG, "DH negotiation completed successfully");
-
-            free(m_sec->dh_param);
-            m_sec->dh_param = nullptr;
-            m_sec->dh_param_len = 0;
             break;
         }
         default:
             ESP_LOGE(BLUFI_TAG, "DH handler unknown type: %d", type);
+            btc_blufi_report_error(ESP_BLUFI_DATA_FORMAT_ERROR);
     }
+}
+
+// Protocol 0x04 ignores iv8: each direction is one continuous CTR stream, so
+// frames must be processed in order (BluFi's sequence numbers guarantee that).
+static int _ctr_crypt(psa_cipher_operation_t* op, uint8_t* crypt_data, int crypt_len) {
+    std::vector<uint8_t> out(crypt_len);
+    size_t out_len = 0;
+    if (psa_cipher_update(op, crypt_data, crypt_len, out.data(), out.size(), &out_len) != PSA_SUCCESS ||
+        out_len != (size_t)crypt_len) {
+        return -1;
+    }
+    memcpy(crypt_data, out.data(), out_len);
+    return crypt_len;
 }
 
 int Blufi::_aes_encrypt(uint8_t iv8, uint8_t* crypt_data, int crypt_len) {
-    if (!m_sec || !m_sec->aes || !crypt_data || crypt_len <= 0) {
+    if (!m_sec || m_sec->aes_key == 0 || !crypt_data || crypt_len <= 0) {
         ESP_LOGE(BLUFI_TAG, "Invalid parameters for AES encryption");
         return -ESP_ERR_INVALID_ARG;
     }
-
-    size_t iv_offset = 0;
-    uint8_t iv0[16];
-    memcpy(iv0, m_sec->iv, 16);
-    iv0[0] = iv8;
-    int ret = mbedtls_aes_crypt_cfb128(m_sec->aes, MBEDTLS_AES_ENCRYPT, crypt_len, &iv_offset, iv0,
-                                       crypt_data, crypt_data);
-
-    if (ret == 0) {
-        return crypt_len;
-    } else {
-        ESP_LOGE(BLUFI_TAG, "AES encrypt failed: %d", ret);
-        return ret;
+    int ret = _ctr_crypt(&m_sec->enc_operation, crypt_data, crypt_len);
+    if (ret < 0) {
+        ESP_LOGE(BLUFI_TAG, "AES encrypt failed");
     }
+    return ret;
 }
 
 int Blufi::_aes_decrypt(uint8_t iv8, uint8_t* crypt_data, int crypt_len) {
-    if (!m_sec || !m_sec->aes || !crypt_data || crypt_len < 0) {
-        ESP_LOGE(BLUFI_TAG, "Invalid parameters for AES decryption %p %p %d", m_sec->aes,
-                 crypt_data, crypt_len);
+    if (!m_sec || m_sec->aes_key == 0 || !crypt_data || crypt_len < 0) {
+        ESP_LOGE(BLUFI_TAG, "Invalid parameters for AES decryption");
         return -ESP_ERR_INVALID_ARG;
     }
-
-    size_t iv_offset = 0;
-    uint8_t iv0[16];
-    memcpy(iv0, m_sec->iv, 16);
-    iv0[0] = iv8;
-    int ret = mbedtls_aes_crypt_cfb128(m_sec->aes, MBEDTLS_AES_DECRYPT, crypt_len, &iv_offset, iv0,
-                                       crypt_data, crypt_data);
-    if (ret != 0) {
-        ESP_LOGE(BLUFI_TAG, "AES decrypt failed: %d", ret);
-        return ret;
-    } else {
-        return crypt_len;
+    if (crypt_len == 0) {
+        return 0;
     }
+    int ret = _ctr_crypt(&m_sec->dec_operation, crypt_data, crypt_len);
+    if (ret < 0) {
+        ESP_LOGE(BLUFI_TAG, "AES decrypt failed");
+    }
+    return ret;
 }
 
 uint16_t Blufi::_crc_checksum(uint8_t iv8, uint8_t* data, int len) {
@@ -606,6 +702,14 @@ bool Blufi::start_wifi_scan() {
 
     m_scan_in_progress = true;
 
+    // Subscribe once for every mode: the STA path (re-provisioning via BOOT
+    // long-press while connected) needs the scan-done event as much as AP does.
+    if (m_scan_event_instance == nullptr) {
+        esp_event_handler_instance_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE,
+                                            &Blufi::_wifi_scan_event_handler, this,
+                                            &m_scan_event_instance);
+    }
+
     // Get current WiFi mode
     wifi_mode_t current_mode;
     esp_err_t err = esp_wifi_get_mode(&current_mode);
@@ -626,12 +730,6 @@ bool Blufi::start_wifi_scan() {
             m_scan_in_progress = false;
             return false;
         }
-        // Register scan event handler
-        esp_event_handler_instance_t scan_event_instance;
-        esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                            &Blufi::_wifi_scan_event_handler, this,
-                                            &scan_event_instance);
-
         // Start scan
         err = esp_wifi_scan_start(NULL, false);
         if (err != ESP_OK) {
@@ -969,7 +1067,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t* para
             strncpy((char*)m_sta_config.sta.password, (char*)param->sta_passwd.passwd,
                     param->sta_passwd.passwd_len);
             m_sta_config.sta.password[param->sta_passwd.passwd_len] = '\0';
-            ESP_LOGI(BLUFI_TAG, "Recv STA PASSWORD : %s", m_sta_config.sta.password);
+            ESP_LOGI(BLUFI_TAG, "Recv STA PASSWORD (%d bytes)", param->sta_passwd.passwd_len);
             break;
         case ESP_BLUFI_EVENT_GET_WIFI_LIST: {
             ESP_LOGI(BLUFI_TAG, "BLUFI get wifi list");

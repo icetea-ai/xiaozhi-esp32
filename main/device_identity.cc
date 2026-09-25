@@ -1,10 +1,3 @@
-// mbedtls 3.x hides struct internals; the ECP keypair fields (grp/Q/d) have
-// no public accessors that fit signing + point export, so use the sanctioned
-// escape hatch (same pattern as ESP-IDF's own examples). MUST precede every
-// mbedtls include in this translation unit — including the ones pulled in by
-// device_identity.h below.
-#define MBEDTLS_ALLOW_PRIVATE_ACCESS
-
 #include "device_identity.h"
 
 #ifdef CONFIG_DEVICE_JWT_AUTH
@@ -15,9 +8,7 @@
 #include <esp_log.h>
 #include <esp_random.h>
 #include <mbedtls/base64.h>
-#include <mbedtls/ecdsa.h>
-#include <mbedtls/ecp.h>
-#include <mbedtls/sha256.h>
+#include <mbedtls/pk.h>
 #include <cstring>
 #include <ctime>
 #include <vector>
@@ -92,33 +83,20 @@ bool DeviceIdentity::EnsureKey() {
 
 bool DeviceIdentity::EnsureKeyLocked() {
     if (key_ready_) return true;
-
-    if (!drbg_ready_) {
-        mbedtls_entropy_init(&entropy_);
-        mbedtls_ctr_drbg_init(&drbg_);
-        const char* pers = "tuni-device-identity";
-        int ret = mbedtls_ctr_drbg_seed(&drbg_, mbedtls_entropy_func, &entropy_,
-                                        reinterpret_cast<const unsigned char*>(pers), strlen(pers));
-        if (ret != 0) {
-            ESP_LOGE(TAG, "ctr_drbg_seed failed: -0x%04x", -ret);
-            return false;
-        }
-        drbg_ready_ = true;
-    }
-
-    mbedtls_pk_init(&pk_);
-    if (LoadFromNvs()) {
+    // psa_crypto_init() is done by ESP-IDF startup; calling again is harmless.
+    if (psa_crypto_init() != PSA_SUCCESS) return false;
+    if (LoadFromNvs() || GenerateAndPersist()) {
         key_ready_ = true;
         return true;
     }
-    mbedtls_pk_free(&pk_);
-    mbedtls_pk_init(&pk_);
-    if (GenerateAndPersist()) {
-        key_ready_ = true;
-        return true;
-    }
-    mbedtls_pk_free(&pk_);
     return false;
+}
+
+static void SetKeyAttrs(psa_key_attributes_t* attr) {
+    psa_set_key_type(attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(attr, 256);
+    psa_set_key_usage_flags(attr, PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_SIGN_MESSAGE | PSA_KEY_USAGE_EXPORT);
+    psa_set_key_algorithm(attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
 }
 
 bool DeviceIdentity::LoadFromNvs() {
@@ -130,9 +108,19 @@ bool DeviceIdentity::LoadFromNvs() {
         ESP_LOGW(TAG, "stored key is not valid base64 — regenerating");
         return false;
     }
-    int ret = mbedtls_pk_parse_key(&pk_, der.data(), der.size(), nullptr, 0, mbedtls_ctr_drbg_random, &drbg_);
+    // DER from mbedtls_pk_write_key_der — the same NVS format the IDF 5.x
+    // firmware wrote, so keys enrolled before the IDF 6 port keep working.
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, der.data(), der.size(), nullptr, 0);
+    if (ret == 0) {
+        psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+        SetKeyAttrs(&attr);
+        ret = mbedtls_pk_import_into_psa(&pk, &attr, &key_id_);
+    }
+    mbedtls_pk_free(&pk);
     if (ret != 0) {
-        ESP_LOGW(TAG, "stored key failed to parse (-0x%04x) — regenerating", -ret);
+        ESP_LOGW(TAG, "stored key failed to parse/import (-0x%04x) — regenerating", -ret);
         return false;
     }
     ESP_LOGI(TAG, "device identity key loaded from NVS");
@@ -140,28 +128,26 @@ bool DeviceIdentity::LoadFromNvs() {
 }
 
 bool DeviceIdentity::GenerateAndPersist() {
-    int ret = mbedtls_pk_setup(&pk_, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
-    if (ret != 0) {
-        ESP_LOGE(TAG, "pk_setup failed: -0x%04x", -ret);
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    SetKeyAttrs(&attr);
+    if (psa_generate_key(&attr, &key_id_) != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "psa_generate_key failed");
         return false;
     }
-    ret = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(pk_), mbedtls_ctr_drbg_random, &drbg_);
-    if (ret != 0) {
-        ESP_LOGE(TAG, "ecp_gen_key failed: -0x%04x", -ret);
-        return false;
-    }
-
-    // mbedtls writes DER at the END of the buffer and returns the length.
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
     uint8_t der[256];
-    ret = mbedtls_pk_write_key_der(&pk_, der, sizeof(der));
+    int ret = mbedtls_pk_copy_from_psa(key_id_, &pk);
+    if (ret == 0) ret = mbedtls_pk_write_key_der(&pk, der, sizeof(der));
+    mbedtls_pk_free(&pk);
     if (ret <= 0) {
-        ESP_LOGE(TAG, "pk_write_key_der failed: -0x%04x", -ret);
+        ESP_LOGE(TAG, "key DER export failed: -0x%04x", -ret);
+        psa_destroy_key(key_id_);
+        key_id_ = 0;
         return false;
     }
-    const uint8_t* der_start = der + sizeof(der) - ret;
-    std::string der_b64 = Base64Std(der_start, ret);
+    std::string der_b64 = Base64Std(der + sizeof(der) - ret, ret);
     if (der_b64.empty()) return false;
-
     Settings settings(kNvsNamespace, true);
     settings.SetString(kNvsKey, der_b64);
     ESP_LOGI(TAG, "device identity key generated and persisted (first boot)");
@@ -171,15 +157,10 @@ bool DeviceIdentity::GenerateAndPersist() {
 std::string DeviceIdentity::GetPublicJwkJson() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!EnsureKeyLocked()) return "";
-
-    mbedtls_ecp_keypair* kp = mbedtls_pk_ec(pk_);
-    // Uncompressed point: 0x04 || X(32) || Y(32)
-    uint8_t point[65];
+    uint8_t point[65];  // 0x04 || X || Y
     size_t olen = 0;
-    int ret = mbedtls_ecp_point_write_binary(&kp->grp, &kp->Q, MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, point,
-                                             sizeof(point));
-    if (ret != 0 || olen != 65) {
-        ESP_LOGE(TAG, "point export failed: -0x%04x olen=%u", -ret, static_cast<unsigned>(olen));
+    if (psa_export_public_key(key_id_, point, sizeof(point), &olen) != PSA_SUCCESS || olen != 65) {
+        ESP_LOGE(TAG, "point export failed");
         return "";
     }
     std::string x = Base64Url(point + 1, 32);
@@ -204,10 +185,10 @@ std::string DeviceIdentity::SignOtaJwt() {
     time_t now = time(nullptr);
     char payload[320];
     // sub == iss is enforced server-side; aud/ttl fixed by contract (§5.1).
-    // %lu with an unsigned long cast, NOT %lld: newlib-nano's printf has no
-    // long long support and emits the literal "ld" (hardware-verified —
-    // produced invalid JSON payloads the server rejected). Unsigned 32-bit
-    // epoch seconds are fine until 2106.
+    // %lu with an unsigned long cast, NOT %lld: printf without long long
+    // support (newlib-nano, used before the IDF 6 port) emits the literal "ld"
+    // and the server rejects the invalid JSON (hardware-verified). Unsigned
+    // 32-bit epoch seconds are fine until 2106.
     snprintf(payload, sizeof(payload),
              "{\"sub\":\"%s\",\"iss\":\"%s\",\"aud\":\"%s\",\"jti\":\"%s\",\"iat\":%lu,\"exp\":%lu}",
              device_id.c_str(), device_id.c_str(), kAudience, jti, static_cast<unsigned long>(now),
@@ -218,31 +199,16 @@ std::string DeviceIdentity::SignOtaJwt() {
         Base64Url(reinterpret_cast<const uint8_t*>(kHeader), sizeof(kHeader) - 1) + "." +
         Base64Url(reinterpret_cast<const uint8_t*>(payload), strlen(payload));
 
-    uint8_t hash[32];
-    if (mbedtls_sha256(reinterpret_cast<const uint8_t*>(signing_input.data()), signing_input.size(), hash, 0) != 0) {
-        return "";
-    }
-
-    // Sign to (r, s) MPIs, then serialize as the raw 64-byte r||s form WebCrypto
-    // verifies (mbedtls' pk_sign would emit DER, which the server rejects).
-    mbedtls_ecp_keypair* kp = mbedtls_pk_ec(pk_);
-    mbedtls_mpi r, s;
-    mbedtls_mpi_init(&r);
-    mbedtls_mpi_init(&s);
-    int ret = mbedtls_ecdsa_sign(&kp->grp, &r, &s, &kp->d, hash, sizeof(hash), mbedtls_ctr_drbg_random, &drbg_);
-    if (ret != 0) {
-        ESP_LOGE(TAG, "ecdsa_sign failed: -0x%04x", -ret);
-        mbedtls_mpi_free(&r);
-        mbedtls_mpi_free(&s);
-        return "";
-    }
+    // PSA ECDSA output is already the raw 64-byte r||s form WebCrypto verifies
+    // (mbedtls_pk_sign would emit DER, which the server rejects).
     uint8_t sig[64];
-    ret = mbedtls_mpi_write_binary(&r, sig, 32);
-    int ret2 = mbedtls_mpi_write_binary(&s, sig + 32, 32);
-    mbedtls_mpi_free(&r);
-    mbedtls_mpi_free(&s);
-    if (ret != 0 || ret2 != 0) return "";
-
+    size_t sig_len = 0;
+    if (psa_sign_message(key_id_, PSA_ALG_ECDSA(PSA_ALG_SHA_256),
+                         reinterpret_cast<const uint8_t*>(signing_input.data()), signing_input.size(),
+                         sig, sizeof(sig), &sig_len) != PSA_SUCCESS || sig_len != 64) {
+        ESP_LOGE(TAG, "psa_sign_message failed");
+        return "";
+    }
     return signing_input + "." + Base64Url(sig, sizeof(sig));
 }
 

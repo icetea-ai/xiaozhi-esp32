@@ -259,7 +259,6 @@ _AUTO_SELECT_RULES: dict[str, list[str]] = {
         "CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y",
         "CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n",
         "CONFIG_BT_BLE_BLUFI_ENABLE=y",
-        "CONFIG_MBEDTLS_DHM_C=y",
     ],
 }
 
