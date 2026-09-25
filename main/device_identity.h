@@ -5,9 +5,7 @@
 
 #ifdef CONFIG_DEVICE_JWT_AUTH
 
-#include <mbedtls/pk.h>
-#include <mbedtls/entropy.h>
-#include <mbedtls/ctr_drbg.h>
+#include <psa/crypto.h>
 #include <mutex>
 #include <string>
 
@@ -45,10 +43,7 @@ private:
 
     std::mutex mutex_;
     bool key_ready_ = false;
-    bool drbg_ready_ = false;
-    mbedtls_pk_context pk_;
-    mbedtls_entropy_context entropy_;
-    mbedtls_ctr_drbg_context drbg_;
+    psa_key_id_t key_id_ = 0;  // volatile PSA key; the DER copy in NVS is the persistent form
 };
 
 #endif // CONFIG_DEVICE_JWT_AUTH

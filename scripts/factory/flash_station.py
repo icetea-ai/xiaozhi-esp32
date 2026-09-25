@@ -147,7 +147,9 @@ def run_esptool(args_list):
 def preflight_chip(port, expected_chip, expected_rev_prefix):
     """Read chip id; refuse to flash the wrong image variant (spec §4.6.1)."""
     out = run_esptool(["--port", port, "--baud", FLASH_BAUD, "chip_id"])
-    match = re.search(r"Chip is (\S+) \(revision (v[\d.]+)\)", out)
+    # esptool v4: "Chip is ESP32-P4 (revision v3.2)"; v5 (IDF 6): "Chip type:  ESP32-P4 (revision v3.2)".
+    # Underscore subcommands are kept: v5 still accepts them (with a deprecation warning).
+    match = re.search(r"Chip (?:is|type:)\s+(\S+) \(revision (v[\d.]+)\)", out)
     if not match:
         sys.exit(f"could not parse chip id from esptool output:\n{out}")
     chip, rev = match.group(1).lower(), match.group(2)

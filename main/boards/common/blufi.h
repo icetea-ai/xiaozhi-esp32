@@ -1,6 +1,5 @@
 #pragma once
 
-#include <aes/esp_aes.h>
 #include <cassert>
 #include <cstring>
 #include <vector>
@@ -9,8 +8,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "mbedtls/aes.h"
-#include "mbedtls/dhm.h"
+#include "psa/crypto.h"
 #include "wifi_manager.h"
 
 class Blufi {
@@ -71,6 +69,10 @@ private:
 
     void _security_deinit();
 
+    void _security_cleanup_aes();
+
+    void _security_cleanup_dh_param();
+
     void _dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_data, int *output_len,
                                     bool *need_free);
 
@@ -110,20 +112,20 @@ private:
     static void _nimble_host_task(void *param);
 #endif
 
-    // Security context, formerly blufi_sec struct
+    // Security context for BluFi protocol 0x04 (IDF 6): RFC 7919 ffdhe3072 key
+    // agreement, PSK = SHA-256(shared secret), AES-256-CTR with one persistent
+    // counter stream per direction. Mirrors ESP-IDF's examples/bluetooth/blufi.
     struct BlufiSecurity {
-#define DH_SELF_PUB_KEY_LEN 128
-        uint8_t self_public_key[DH_SELF_PUB_KEY_LEN];
-#define SHARE_KEY_LEN 128
-        uint8_t share_key[SHARE_KEY_LEN];
+        static constexpr size_t kDhKeyLen = 384;  // 3072-bit
+        uint8_t self_public_key[kDhKeyLen];
+        uint8_t share_key[kDhKeyLen];
         size_t share_len;
-#define PSK_LEN 16
-        uint8_t psk[PSK_LEN];
+        uint8_t psk[32];
         uint8_t *dh_param;
         int dh_param_len;
-        uint8_t iv[16];
-        mbedtls_dhm_context *dhm;
-        esp_aes_context *aes;
+        psa_key_id_t aes_key;
+        psa_cipher_operation_t enc_operation;
+        psa_cipher_operation_t dec_operation;
     };
 
     BlufiSecurity *m_sec;
@@ -153,4 +155,6 @@ private:
     // available or a scan is already in flight; cleared by the scan-done
     // handler after dispatching the response.
     bool m_send_list_after_scan = false;
+    // WIFI_EVENT_SCAN_DONE subscription; registered once, released in deinit().
+    esp_event_handler_instance_t m_scan_event_instance = nullptr;
 };

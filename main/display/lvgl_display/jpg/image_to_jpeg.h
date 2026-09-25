@@ -9,7 +9,18 @@
 
 #if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S3)
 // ESP32-P4 使用 esp_video 组件提供的 V4L2 头文件
+// esp_video >= 2.0's linux/ioctl.h unconditionally redefines _IO/_IOR/_IOW, clashing with
+// lwip/sockets.h (pulled in earlier via audio_service.h). Only V4L2_PIX_FMT_* is needed here.
+#pragma push_macro("_IO")
+#pragma push_macro("_IOR")
+#pragma push_macro("_IOW")
+#undef _IO
+#undef _IOR
+#undef _IOW
 #include <linux/videodev2.h>
+#pragma pop_macro("_IO")
+#pragma pop_macro("_IOR")
+#pragma pop_macro("_IOW")
 #else
 // ESP32-S3 等其他芯片：定义常用的 V4L2 像素格式
 #define V4L2_PIX_FMT_RGB565 0x50424752  // 'RGBP'

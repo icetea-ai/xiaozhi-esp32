@@ -30,7 +30,8 @@ jobs:
       - id: list
         name: Get all variant list
         run: |
-          echo "all_variants=$(python scripts/release.py --list-boards --json)" >> $GITHUB_OUTPUT
+          # Only the Tuni boards are ported to IDF 6 (docs/superpowers/specs/2026-09-25-idf6-port-design.md)
+          echo "all_variants=$(python scripts/release.py --list-boards --json | jq -c 'map(select(.board | startswith("tuni-")))')" >> $GITHUB_OUTPUT
 
       - id: select
         name: Select variants based on changes
@@ -92,7 +93,7 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.variants) }}
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:v5.5.2
+      image: espressif/idf:v6.0.2
     steps:
       - name: Checkout
         uses: actions/checkout@v4
