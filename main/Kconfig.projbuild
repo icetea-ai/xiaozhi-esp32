@@ -372,7 +372,7 @@ choice BOARD_TYPE
         bool "Waveshare ESP32-S3-LCD-0.85"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_TUNI_P4
-        bool "Tuni P4 (Waveshare ESP32-P4-NANO, onboard audio, no display)"
+        bool "Tuni P4 (Waveshare ESP32-P4-NANO, onboard audio, JD9365 MIPI-DSI LCD)"
         depends on IDF_TARGET_ESP32P4
     config BOARD_TYPE_WAVESHARE_ESP32_P4_NANO
         bool "Waveshare ESP32-P4-NANO"

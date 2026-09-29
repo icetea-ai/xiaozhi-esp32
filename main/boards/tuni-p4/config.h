@@ -20,4 +20,23 @@
 
 #define BOOT_BUTTON_GPIO  GPIO_NUM_35
 
+// JD9365D MIPI-DSI panel (Waveshare 10.1", 800x1280 portrait, 2 lanes).
+// Will update when I got my hand on an actual touch-capable 480x480 display.
+#define LCD_PANEL_H_RES            800
+#define LCD_PANEL_V_RES            1280
+#define LCD_MIPI_DSI_LANE_NUM      2
+#define LCD_PIN_NUM_RST            GPIO_NUM_NC
+#define MIPI_DSI_PHY_PWR_LDO_CHAN        3
+#define MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV  2500
+
+// The robot's spec display is 480x480, so the UI renders into a 480x480 window
+// centred on the panel; the rest of the panel stays black.
+#define DISPLAY_WIDTH     480
+#define DISPLAY_HEIGHT    480
+#define DISPLAY_OFFSET_X  ((LCD_PANEL_H_RES - DISPLAY_WIDTH) / 2)
+#define DISPLAY_OFFSET_Y  ((LCD_PANEL_V_RES - DISPLAY_HEIGHT) / 2)
+#define DISPLAY_SWAP_XY   false
+#define DISPLAY_MIRROR_X  false
+#define DISPLAY_MIRROR_Y  false
+
 #endif // _BOARD_CONFIG_H_
