@@ -19,7 +19,8 @@
                 "CONFIG_DEVICE_JWT_AUTH=y",
                 "CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=y",
                 "CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=n",
-                "CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y"
+                "CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y",
+                "CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=n"
             ]
         },
         {
@@ -40,7 +41,8 @@
                 "CONFIG_DEVICE_JWT_AUTH=y",
                 "CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=y",
                 "CONFIG_USE_HOTSPOT_WIFI_PROVISIONING=n",
-                "CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y"
+                "CONFIG_ESP_HOSTED_ENABLE_BT_BLUEDROID=y",
+                "CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP=n"
             ]
         }
     ]

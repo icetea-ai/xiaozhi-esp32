@@ -27,7 +27,7 @@
 // init sequence is the 120 ms sleep-out).
 #define LCD_INIT_TIMEOUT_MS 2000
 
-// The DPI panel has no set_gap(), so the 480x480 window is placed by wrapping
+// The DPI panel has no set_gap(), so the 640x480 window is placed by wrapping
 // the panel's draw_bitmap and shifting every flush area into the window.
 static esp_err_t (*s_panel_draw_bitmap)(esp_lcd_panel_t*, int, int, int, int, const void*) = nullptr;
 
