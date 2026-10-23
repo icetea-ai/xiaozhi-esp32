@@ -1,6 +1,7 @@
 // main/boards/tuni-p4/tuni_p4.cc
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "tuni_p4_audio_codec.h"
 #include "application.h"
 #include "display/lcd_display.h"
 #include "button.h"
@@ -204,6 +205,13 @@ private:
 
 public:
     TuniP4() : boot_button_(BOOT_BUTTON_GPIO, false, 5000) {
+        // Keep the on-board speaker amp off; output goes to the MAX98357As.
+        gpio_config_t pa_cfg = {
+            .pin_bit_mask = 1ULL << AUDIO_CODEC_PA_PIN,
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        ESP_ERROR_CHECK(gpio_config(&pa_cfg));
+        gpio_set_level(AUDIO_CODEC_PA_PIN, 0);
         InitializeCodecI2c();
         InitializeButtons();
         if (!InitializeLcd()) {
@@ -212,20 +220,25 @@ public:
     }
 
     virtual AudioCodec* GetAudioCodec() override {
-        static Es8311AudioCodec audio_codec(
+        // ES8311 is used for the mic only; its PA pin is left to us so the
+        // on-board speaker stays off.
+        static Es8311AudioCodec mic_codec(
             codec_i2c_bus_, I2C_NUM_1, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
             AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR);
+            GPIO_NUM_NC, AUDIO_CODEC_ES8311_ADDR);
+        static TuniP4AudioCodec audio_codec(
+            &mic_codec, AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_SPK_I2S_GPIO_BCLK, AUDIO_SPK_I2S_GPIO_WS, AUDIO_SPK_I2S_GPIO_DOUT);
         // Far-field open mic: bump ES8311 ADC PGA from the 30 dB default to 36 dB
         // (+6 dB ≈ 2x) for louder capture (helps STT + pronunciation scoring).
         // PGA steps are 0/6/.../42 dB; 36 keeps headroom so loud speech doesn't clip.
         // Applied on the first EnableInput (UpdateDeviceState), set here before that.
         audio_codec.SetInputGain(36.0f);
-        // Speaker too quiet to hear the TTS clearly: force output volume to max
-        // (default is 70/100). Overrides any stored NVS value on boot so it's
-        // reliably loud; applied on the first EnableOutput.
-        audio_codec.SetOutputVolume(100);
+        // Output volume is forced on boot (overrides any stored NVS value) and
+        // scaled in software by TuniP4AudioCodec. 100 is full scale, which
+        // clips the MAX98357As at their 9 dB default gain; 30 is about -21 dB.
+        audio_codec.SetOutputVolume(30);
         return &audio_codec;
     }
 
