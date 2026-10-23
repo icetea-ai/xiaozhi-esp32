@@ -13,6 +13,14 @@
 #define AUDIO_I2S_GPIO_DIN  GPIO_NUM_11
 #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_9
 
+// External MAX98357A amps (left + right) on I2S1. GPIO20/21/22 are on the
+// left header, next to a GND pin.
+#define AUDIO_SPK_I2S_GPIO_BCLK  GPIO_NUM_21
+#define AUDIO_SPK_I2S_GPIO_WS    GPIO_NUM_22
+#define AUDIO_SPK_I2S_GPIO_DOUT  GPIO_NUM_20
+
+// Enable pin of the on-board speaker amp; held low since the MAX98357As
+// replace it.
 #define AUDIO_CODEC_PA_PIN       GPIO_NUM_53
 #define AUDIO_CODEC_I2C_SDA_PIN  GPIO_NUM_7
 #define AUDIO_CODEC_I2C_SCL_PIN  GPIO_NUM_8
