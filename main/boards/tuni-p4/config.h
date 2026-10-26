@@ -38,8 +38,8 @@
 
 // The robot's spec display is 640x480, so the UI renders into a 640x480 window
 // centred on the panel; the rest of the panel stays black.
-#define DISPLAY_WIDTH     640
-#define DISPLAY_HEIGHT    480
+#define DISPLAY_WIDTH     480
+#define DISPLAY_HEIGHT    300
 #define DISPLAY_OFFSET_X  ((LCD_PANEL_H_RES - DISPLAY_WIDTH) / 2)
 #define DISPLAY_OFFSET_Y  ((LCD_PANEL_V_RES - DISPLAY_HEIGHT) / 2)
 #define DISPLAY_SWAP_XY   false
