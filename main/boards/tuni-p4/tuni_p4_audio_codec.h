@@ -3,30 +3,29 @@
 #define _TUNI_P4_AUDIO_CODEC_H_
 
 #include "audio_codec.h"
-#include "codecs/es8311_audio_codec.h"
 
 #include <driver/gpio.h>
+#include <driver/i2s_std.h>
 #include <mutex>
 
-// Mic through the on-board ES8311 (I2S0), speakers through two external
-// MAX98357A amps sharing one I2S bus (I2S1). The amps pick their channel by
-// SD_MODE strapping (left: tied to 3V3, right: 220k to 3V3); the mono TTS
-// stream is duplicated into both slots so each speaker plays it.
+// Two external MAX98357A amps and two ICS-43434 mics on one full-duplex I2S
+// bus (I2S1), sharing BCLK and WS.
+// - Amps pick their channel by SD_MODE strapping (left: tied to 3V3, right:
+//   220k to 3V3); the mono TTS stream is duplicated into both slots.
+// - Mics pick their slot by L/R (mic 1: GND = left, mic 2: 3V3 = right) and
+//   share one SD line; the two channels are averaged into a mono stream.
 class TuniP4AudioCodec : public AudioCodec {
 private:
-    Es8311AudioCodec* mic_;
-    std::mutex tx_mutex_;
+    std::mutex data_if_mutex_;
 
     virtual int Read(int16_t* dest, int samples) override;
     virtual int Write(const int16_t* data, int samples) override;
 
 public:
-    TuniP4AudioCodec(Es8311AudioCodec* mic, int output_sample_rate,
-        gpio_num_t spk_bclk, gpio_num_t spk_ws, gpio_num_t spk_dout);
+    TuniP4AudioCodec(int input_sample_rate, int output_sample_rate,
+        gpio_num_t bclk, gpio_num_t ws, gpio_num_t spk_dout, gpio_num_t mic_din);
     virtual ~TuniP4AudioCodec();
 
-    virtual bool InputData(std::vector<int16_t>& data) override;
-    virtual void SetInputGain(float gain) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
 };
