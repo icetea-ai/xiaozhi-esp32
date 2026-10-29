@@ -1,6 +1,5 @@
 // main/boards/tuni-p4/tuni_p4.cc
 #include "wifi_board.h"
-#include "codecs/es8311_audio_codec.h"
 #include "tuni_p4_audio_codec.h"
 #include "application.h"
 #include "display/lcd_display.h"
@@ -220,21 +219,13 @@ public:
     }
 
     virtual AudioCodec* GetAudioCodec() override {
-        // ES8311 is used for the mic only; its PA pin is left to us so the
-        // on-board speaker stays off.
-        static Es8311AudioCodec mic_codec(
-            codec_i2c_bus_, I2C_NUM_1, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
-            GPIO_NUM_NC, AUDIO_CODEC_ES8311_ADDR);
         static TuniP4AudioCodec audio_codec(
-            &mic_codec, AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_SPK_I2S_GPIO_BCLK, AUDIO_SPK_I2S_GPIO_WS, AUDIO_SPK_I2S_GPIO_DOUT);
-        // Far-field open mic: bump ES8311 ADC PGA from the 30 dB default to 36 dB
-        // (+6 dB ≈ 2x) for louder capture (helps STT + pronunciation scoring).
-        // PGA steps are 0/6/.../42 dB; 36 keeps headroom so loud speech doesn't clip.
-        // Applied on the first EnableInput (UpdateDeviceState), set here before that.
-        audio_codec.SetInputGain(36.0f);
+            AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN);
+        // Digital mic gain in dB. ICS-43434 is -26 dBFS at 94 dB SPL, so speech
+        // at ~1 m lands near -60 dBFS; +24 dB lifts it for STT/VAD while leaving
+        // headroom for close, loud speech. Tune on serial if VAD misses or clips.
+        audio_codec.SetInputGain(24.0f);
         // Output volume is forced on boot (overrides any stored NVS value) and
         // scaled in software by TuniP4AudioCodec. 100 is full scale, which
         // clips the MAX98357As at their 9 dB default gain; 30 is about -21 dB.
