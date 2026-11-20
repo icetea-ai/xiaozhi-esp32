@@ -24,6 +24,14 @@
 
 #define BOOT_BUTTON_GPIO  GPIO_NUM_35
 
+// MG90S servo signal on the left header. Powered from its own 5V (or a 5V rail
+// with a bulk cap at the servo), grounds tied to the board. Pulse range is the
+// MG90S nominal 0..180 degrees; trim per unit if the end stops buzz.
+#define SERVO_GPIO          GPIO_NUM_5
+#define SERVO_MIN_PULSE_US  500
+#define SERVO_MAX_PULSE_US  2400
+#define SERVO_HOME_ANGLE    90
+
 // JD9365D MIPI-DSI panel (Waveshare 10.1", 800x1280 portrait, 2 lanes).
 #define LCD_PANEL_H_RES            800
 #define LCD_PANEL_V_RES            1280

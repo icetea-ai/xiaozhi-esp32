@@ -1,11 +1,13 @@
 // main/boards/tuni-p4/tuni_p4.cc
 #include "wifi_board.h"
 #include "tuni_p4_audio_codec.h"
+#include "tuni_p4_servo.h"
 #include "application.h"
 #include "display/lcd_display.h"
 #include "button.h"
 #include "config.h"
 #include "ssid_manager.h"
+#include "mcp_server.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -60,6 +62,7 @@ private:
     i2c_master_bus_handle_t codec_i2c_bus_;
     Button boot_button_;
     Display* display_ = nullptr;
+    TuniP4Servo* servo_ = nullptr;
 
     void InitializeCodecI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -202,6 +205,31 @@ private:
         });
     }
 
+    void InitializeServo() {
+        servo_ = new TuniP4Servo(SERVO_GPIO, LEDC_TIMER_0, LEDC_CHANNEL_0,
+                                 SERVO_MIN_PULSE_US, SERVO_MAX_PULSE_US, SERVO_HOME_ANGLE);
+    }
+
+    void InitializeTools() {
+        auto& mcp_server = McpServer::GetInstance();
+        mcp_server.AddTool("self.servo.get_angle",
+            "Get the current angle of the servo, in degrees (0-180).",
+            PropertyList(),
+            [this](const PropertyList& properties) -> ReturnValue {
+                return servo_->GetAngle();
+            });
+        mcp_server.AddTool("self.servo.set_angle",
+            "Rotate the servo to an absolute angle in degrees. 0 and 180 are the "
+            "two end stops, 90 is the centre (home) position.",
+            PropertyList({
+                Property("angle", kPropertyTypeInteger, 0, 180),
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                servo_->SetAngle(properties["angle"].value<int>());
+                return true;
+            });
+    }
+
 public:
     TuniP4() : boot_button_(BOOT_BUTTON_GPIO, false, 5000) {
         // Keep the on-board speaker amp off; output goes to the MAX98357As.
@@ -213,6 +241,8 @@ public:
         gpio_set_level(AUDIO_CODEC_PA_PIN, 0);
         InitializeCodecI2c();
         InitializeButtons();
+        InitializeServo();
+        InitializeTools();
         if (!InitializeLcd()) {
             display_ = new NoDisplay();
         }
